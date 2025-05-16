@@ -162,22 +162,35 @@ class ObfuscatedModel(BaseModel):
     
     def _map_to_uuids(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Map semantic field names to UUIDs.
+        Map semantic field names to UUIDs and encrypt sensitive fields.
         
         This converts a dictionary with semantic keys to one with UUID keys,
-        ready for storing in the database.
+        ready for storing in the database. It also encrypts fields marked for
+        encryption.
         
         Args:
             data: Dictionary with semantic field names as keys
             
         Returns:
-            Dictionary with UUID keys
+            Dictionary with UUID keys and encrypted sensitive fields
         """
         # Get the registry client
         registry = self._get_registry_client()
         
+        # Check if encryption is enabled
+        encryption_enabled = DBFacadeConfig.is_encryption_enabled()
+        
+        # If encryption is enabled, create an encryptor
+        encryptor = None
+        if encryption_enabled:
+            from ..encryption import FieldEncryptor
+            encryptor = FieldEncryptor()
+        
         # Create a new dictionary with UUID keys
         uuid_data: Dict[str, Any] = {}
+        
+        # Get the obfuscated field metadata
+        obfuscated_fields = self._collect_obfuscated_fields()
         
         # Convert each key to its UUID
         for key, value in data.items():
@@ -188,9 +201,24 @@ class ObfuscatedModel(BaseModel):
             
             # Get the UUID for this field
             try:
-                uuid = registry.get_uuid_for_label(key)
-                uuid_key = str(uuid)  # Use string representation for storage
-                uuid_data[uuid_key] = value
+                uuid_obj = registry.get_uuid_for_label(key)
+                uuid_key = str(uuid_obj)  # Use string representation for storage
+                
+                # Check if this field should be encrypted
+                should_encrypt = (
+                    encryption_enabled and
+                    encryptor is not None and
+                    key in obfuscated_fields and
+                    obfuscated_fields[key].obfuscation_level.value == "encrypted"
+                )
+                
+                if should_encrypt:
+                    # Encrypt the field value
+                    encrypted_value = encryptor.encrypt_field(value, uuid_obj)
+                    uuid_data[uuid_key] = encrypted_value
+                else:
+                    # Store the value as-is
+                    uuid_data[uuid_key] = value
             except Exception:
                 # In dev mode, allow using semantic names for convenience
                 if DBFacadeConfig.is_dev_mode():
@@ -203,16 +231,16 @@ class ObfuscatedModel(BaseModel):
     
     def _map_to_semantic(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Map UUID field names back to semantic names.
+        Map UUID field names back to semantic names and decrypt encrypted fields.
         
         This converts a dictionary with UUID keys to one with semantic keys,
-        for use in development environments.
+        for use in development environments. It also decrypts any encrypted fields.
         
         Args:
             data: Dictionary with UUID keys
             
         Returns:
-            Dictionary with semantic field names as keys
+            Dictionary with semantic field names as keys and decrypted values
         """
         # Only perform semantic mapping in development mode
         if not DBFacadeConfig.is_dev_mode():
@@ -220,6 +248,15 @@ class ObfuscatedModel(BaseModel):
         
         # Get the registry client
         registry = self._get_registry_client()
+        
+        # Check if encryption is enabled
+        encryption_enabled = DBFacadeConfig.is_encryption_enabled()
+        
+        # If encryption is enabled, create an encryptor
+        encryptor = None
+        if encryption_enabled:
+            from ..encryption import FieldEncryptor
+            encryptor = FieldEncryptor()
         
         # Create a new dictionary with semantic keys
         semantic_data: Dict[str, Any] = {}
@@ -233,9 +270,29 @@ class ObfuscatedModel(BaseModel):
             
             # Try to parse the key as a UUID
             try:
-                uuid = UUID(key)
-                label = registry.get_label_for_uuid(uuid)
-                semantic_data[label] = value
+                uuid_obj = UUID(key)
+                label = registry.get_label_for_uuid(uuid_obj)
+                
+                # Check if this might be an encrypted value
+                is_encrypted = (
+                    encryption_enabled and
+                    encryptor is not None and
+                    isinstance(value, dict) and
+                    "value" in value and
+                    "metadata" in value
+                )
+                
+                if is_encrypted:
+                    # Attempt to decrypt the value
+                    try:
+                        decrypted_value = encryptor.decrypt_field(value, uuid_obj)
+                        semantic_data[label] = decrypted_value
+                    except Exception:
+                        # If decryption fails, use the raw value
+                        semantic_data[label] = value
+                else:
+                    # Use the raw value
+                    semantic_data[label] = value
             except (ValueError, KeyError):
                 # If not a valid UUID or not found, keep the original key
                 semantic_data[key] = value
