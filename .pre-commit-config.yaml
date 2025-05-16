@@ -1,0 +1,58 @@
+repos:
+-   repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+    -   id: trailing-whitespace
+    -   id: end-of-file-fixer
+    -   id: check-yaml
+    -   id: check-added-large-files
+    -   id: debug-statements
+    -   id: check-ast
+
+-   repo: https://github.com/psf/black
+    rev: 24.3.0
+    hooks:
+    -   id: black
+        args: [--line-length=100]
+
+-   repo: https://github.com/pycqa/isort
+    rev: 5.13.2
+    hooks:
+    -   id: isort
+        args: ["--profile", "black", "--line-length", "100"]
+
+-   repo: https://github.com/python-poetry/poetry
+    rev: '1.8.2'
+    hooks:
+    -   id: poetry-check
+
+-   repo: https://github.com/charliermarsh/ruff-pre-commit
+    rev: v0.3.2
+    hooks:
+    -   id: ruff
+        args: [--line-length=100, --select=E,F,I,N,B]
+
+-   repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.9.0
+    hooks:
+    -   id: mypy
+        additional_dependencies: [
+            'pydantic>=2.0.0', 
+            'types-requests', 
+            'types-PyYAML'
+        ]
+
+# Custom hooks
+-   repo: local
+    hooks:
+    -   id: check-blanket-exception
+        name: Check for blanket exception handlers
+        entry: python scripts/hooks/check_blanket_exception.py
+        language: python
+        types: [python]
+
+    -   id: check-semantic-leakage
+        name: Check for semantic data leakage
+        entry: python scripts/hooks/check_semantic_leakage.py
+        language: python
+        types: [python]

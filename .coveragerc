@@ -1,0 +1,22 @@
+[run]
+source = src
+omit =
+    tests/*
+    scripts/*
+    */site-packages/*
+    .venv*/*
+
+[report]
+exclude_lines =
+    pragma: no cover
+    def __repr__
+    if self.debug:
+    raise NotImplementedError
+    if __name__ == .__main__.:
+    pass
+    raise ImportError
+    except ImportError
+    raise AssertionError
+
+[html]
+directory = coverage_html_report

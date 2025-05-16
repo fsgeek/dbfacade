@@ -1,0 +1,30 @@
+[project]
+name = "indaleko-dbfacade"
+version = "0.1.0"
+description = "This is a Database Facade Layer used to Enforce Security for Indaleko"
+readme = "README.md"
+authors = [
+    { name = "Tony Mason", email = "fsgeek@cs.ubc.ca" }
+]
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi",
+  "uvicorn[standard]",
+  "pydantic"
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "httpx", "ruff", "pytest-cov"]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+packages = ["indaleko_dbfacade"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+
+[ruff.linter]
+line-length = 100
+select = ["E", "F", "I", "N", "B"]
