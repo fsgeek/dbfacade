@@ -61,30 +61,11 @@ app = FastAPI(
 # Database connection dependency
 def get_db():
     """Get a database connection."""
-    # This is a placeholder for the actual database connection
-    # In a real implementation, this would connect to the database
-    # and return a connection or client
-    db_url = DBFacadeConfig.get_database_url()
+    # Use the ArangoDB client
+    from ..db.arangodb import ArangoDBClient
     
-    # For now, just return a mock database client
-    class MockDatabase:
-        def insert(self, collection, data):
-            """Mock insert operation."""
-            record_id = uuid.uuid4()
-            print(f"[DB] Inserted into {collection}: {data}")
-            return record_id
-            
-        def query(self, collection, filter_dict, limit):
-            """Mock query operation."""
-            print(f"[DB] Query on {collection} with filter: {filter_dict}, limit: {limit}")
-            return [{"mock_field": "mock_value"}]
-            
-        def get(self, collection, record_id):
-            """Mock get operation."""
-            print(f"[DB] Get record {record_id} from {collection}")
-            return {"mock_field": "mock_value"}
-    
-    return MockDatabase()
+    # Return a new ArangoDB client instance
+    return ArangoDBClient()
 
 
 # API endpoints
@@ -144,9 +125,19 @@ def run_query(payload: QueryPayload, db=Depends(get_db)) -> QueryResult:
         # In development mode, resolve UUIDs to semantic field names
         resolved_fields = None
         if dev_mode:
-            # This is a placeholder for the actual UUID resolution
-            # In a real implementation, this would look up the UUIDs in the registry
-            resolved_fields = {"mock_uuid": "mock_field_name"}
+            # Use the registry to resolve UUIDs to semantic field names
+            from ..db_facade_service import DBFacadeService
+            
+            # Create a DB Facade Service instance
+            service = DBFacadeService()
+            
+            # Check if we have results to resolve
+            if results and len(results) > 0:
+                # Use the first result to get field mappings
+                first_result = results[0]
+                
+                # Resolve UUIDs to semantic names
+                resolved_fields = service.resolve_uuid_fields(first_result)
             
         # Return the query result
         return QueryResult(results=results, resolved_fields=resolved_fields)
@@ -190,9 +181,25 @@ def get_record(
         
         # In development mode, resolve UUIDs to semantic field names
         if dev_mode:
-            # This is a placeholder for the actual UUID resolution
-            # In a real implementation, this would look up the UUIDs in the registry
-            pass
+            # Use the registry to resolve UUIDs to semantic field names
+            from ..db_facade_service import DBFacadeService
+            
+            # Create a DB Facade Service instance
+            service = DBFacadeService()
+            
+            # Resolve UUIDs to semantic names and create a new dictionary
+            resolved_record = {}
+            
+            for field_uuid, value in record.items():
+                try:
+                    field_name = service.registry.get_label_for_uuid(uuid.UUID(field_uuid))
+                    resolved_record[field_name] = value
+                except (ValueError, KeyError):
+                    # If we can't resolve the UUID, use it as is
+                    resolved_record[field_uuid] = value
+            
+            # Use the resolved record
+            record = resolved_record
             
         return record
     except Exception as e:

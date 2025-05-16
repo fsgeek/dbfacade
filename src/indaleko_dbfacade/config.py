@@ -113,6 +113,16 @@ class DBFacadeConfig:
         if env_db_url:
             cls._config["database"]["url"] = env_db_url
         
+        # Check for database username override
+        env_db_username = os.environ.get("INDALEKO_DB_USERNAME")
+        if env_db_username:
+            cls._config["database"]["username"] = env_db_username
+        
+        # Check for database password override
+        env_db_password = os.environ.get("INDALEKO_DB_PASSWORD")
+        if env_db_password:
+            cls._config["database"]["password"] = env_db_password
+        
         # Check for registry URL override
         env_registry_url = os.environ.get("INDALEKO_REGISTRY_URL")
         if env_registry_url:
@@ -190,3 +200,52 @@ class DBFacadeConfig:
             The URL of the database
         """
         return cls.get("database.url", "http://localhost:8529")
+    
+    @classmethod
+    def get_database_credentials(cls) -> dict:
+        """
+        Get the database credentials.
+        
+        Returns:
+            Dictionary containing database credentials
+        """
+        return {
+            "username": cls.get("database.username", "root"),
+            "password": cls.get("database.password", ""),
+            "database": cls.get("database.database", "dbfacade")
+        }
+    
+    @classmethod
+    def load_from_secrets_file(cls, file_path: str) -> None:
+        """
+        Load configuration from a secrets file.
+        
+        This is a convenience method for loading configuration from
+        a secrets file, which can contain sensitive information.
+        
+        Args:
+            file_path: Path to the secrets file
+        """
+        path = Path(file_path)
+        if not path.exists():
+            print(f"Secrets file not found: {file_path}")
+            return
+        
+        try:
+            with open(path, "r") as f:
+                secrets = yaml.safe_load(f)
+                
+            # Update configuration with values from secrets
+            if secrets:
+                for section, values in secrets.items():
+                    if isinstance(values, dict):
+                        if section not in cls._config:
+                            cls._config[section] = {}
+                        cls._config[section].update(values)
+                    else:
+                        cls._config[section] = values
+                
+            print(f"Loaded configuration from secrets file: {file_path}")
+        except Exception as e:
+            print(f"Error loading secrets file: {e}")
+            sys.exit(1)

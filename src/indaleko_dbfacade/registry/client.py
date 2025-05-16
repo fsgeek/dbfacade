@@ -61,10 +61,15 @@ class RegistryClient:
             if time.time() - timestamp < self._cache_ttl:
                 return uuid_value
         
-        # TODO: Implement the actual registry service API call
-        # For now, just generate a UUID based on the label
-        # This is a placeholder and will be replaced with actual API calls
-        uuid_value = uuid4()
+        # Use the ArangoDB client to get or create the UUID
+        try:
+            from ..db.arangodb import ArangoDBClient
+            db = ArangoDBClient()
+            uuid_value = db.get_uuid_for_label(label)
+        except ImportError as e:
+            # Specific error for import failure
+            raise ConnectionError(f"Registry client unavailable: {e}")
+        # No generic exception handler - let errors propagate upward for better debugging
         
         # Store in cache
         self._label_to_uuid_cache[label] = (uuid_value, time.time())
@@ -92,10 +97,15 @@ class RegistryClient:
             if time.time() - timestamp < self._cache_ttl:
                 return label
         
-        # TODO: Implement the actual registry service API call
-        # For now, return a placeholder value
-        # This is a placeholder and will be replaced with actual API calls
-        label = f"unknown_label_{uuid}"
+        # Use the ArangoDB client to get the label
+        try:
+            from ..db.arangodb import ArangoDBClient
+            db = ArangoDBClient()
+            label = db.get_label_for_uuid(uuid)
+        except ImportError as e:
+            # Specific error for import failure
+            raise ConnectionError(f"Registry client unavailable: {e}")
+        # No generic exception handler - let errors propagate upward for better debugging
         
         # Store in cache
         self._uuid_to_label_cache[uuid] = (label, time.time())
