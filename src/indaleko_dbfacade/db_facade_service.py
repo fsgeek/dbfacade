@@ -13,7 +13,7 @@ for obfuscated database operations with proper error handling following the fail
 import sys
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Type, Union, TypeVar, cast
+from typing import TypeVar, cast
 
 from pydantic import BaseModel
 
@@ -100,9 +100,9 @@ class DBFacadeService:
     
     def get_model(
         self, 
-        model_class: Type[T], 
+        model_class: type[T], 
         record_uuid: uuid.UUID, 
-        dev_mode: Optional[bool] = None
+        dev_mode: bool | None = None
     ) -> T:
         """
         Get a model from the database.
@@ -158,11 +158,11 @@ class DBFacadeService:
     
     def query_models(
         self,
-        model_class: Type[T],
-        filter_dict: Dict[str, Any],
+        model_class: type[T],
+        filter_dict: dict[str, object],
         limit: int = 50,
-        dev_mode: Optional[bool] = None
-    ) -> List[T]:
+        dev_mode: bool | None = None
+    ) -> list[T]:
         """
         Query models from the database.
         
@@ -257,7 +257,7 @@ class DBFacadeService:
         # Update the record in the database
         self.db.update(collection_uuid, record_uuid, obfuscated_data)
     
-    def delete_model(self, model_class: Type[ObfuscatedModel], record_uuid: uuid.UUID) -> None:
+    def delete_model(self, model_class: type[ObfuscatedModel], record_uuid: uuid.UUID) -> None:
         """
         Delete a model from the database.
         
@@ -278,7 +278,7 @@ class DBFacadeService:
         # Delete the record from the database
         self.db.delete(collection_uuid, record_uuid)
     
-    def resolve_uuid_fields(self, data: Dict[str, Any]) -> Dict[str, str]:
+    def resolve_uuid_fields(self, data: dict[str, object]) -> dict[str, str]:
         """
         Resolve UUID fields to their semantic names.
         
@@ -302,7 +302,7 @@ class DBFacadeService:
         
         return resolved_fields
     
-    def register_model_schema(self, model_class: Type[ObfuscatedModel]) -> Dict[str, uuid.UUID]:
+    def register_model_schema(self, model_class: type[ObfuscatedModel]) -> dict[str, uuid.UUID]:
         """
         Register a model schema with the registry.
         

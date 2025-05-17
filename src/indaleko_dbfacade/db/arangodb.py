@@ -9,7 +9,7 @@ import json
 import sys
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Union, cast
+from typing import cast
 
 from ..config import DBFacadeConfig
 
@@ -74,7 +74,7 @@ class ArangoDBClient:
             print(f"Creating collection: {self.data_collection}")
             self.arango_create_collection({"name": self.data_collection})
     
-    def insert(self, collection_uuid: uuid.UUID, data: Dict[str, Any]) -> uuid.UUID:
+    def insert(self, collection_uuid: uuid.UUID, data: dict[str, object]) -> uuid.UUID:
         """
         Insert a document into the database.
         
@@ -107,9 +107,9 @@ class ArangoDBClient:
     def query(
         self, 
         collection_uuid: uuid.UUID, 
-        filter_dict: Dict[str, Any],
+        filter_dict: dict[str, object],
         limit: int = 50
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, object]]:
         """
         Query documents from the database.
         
@@ -154,7 +154,7 @@ class ArangoDBClient:
         # Extract the data from each document
         return [doc["data"] for doc in result]
     
-    def get(self, collection_uuid: uuid.UUID, record_uuid: uuid.UUID) -> Dict[str, Any]:
+    def get(self, collection_uuid: uuid.UUID, record_uuid: uuid.UUID) -> dict[str, object]:
         """
         Get a document from the database.
         
@@ -194,7 +194,7 @@ class ArangoDBClient:
         self, 
         collection_uuid: uuid.UUID, 
         record_uuid: uuid.UUID, 
-        data: Dict[str, Any]
+        data: dict[str, object]
     ) -> None:
         """
         Update a document in the database.

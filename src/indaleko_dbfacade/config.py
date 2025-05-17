@@ -9,7 +9,8 @@ encryption settings.
 import os
 import sys
 from pathlib import Path
-from typing import Any, Dict, Optional
+from copy import deepcopy
+# No need for typing imports in Python 3.13
 
 import yaml
 
@@ -23,7 +24,7 @@ class DBFacadeConfig:
     """
     
     # Default configuration values
-    _default_config: Dict[str, Any] = {
+    _default_config: dict[str, object] = {
         "mode": "DEV",  # DEV or PROD
         "encryption": {
             "enabled": False,
@@ -43,21 +44,21 @@ class DBFacadeConfig:
     }
     
     # Instance configuration values, loaded from file or environment
-    _config: Dict[str, Any] = {}
+    _config: dict[str, object] = {}
     
     # Flag indicating if the configuration has been initialized
     _initialized: bool = False
     
     @classmethod
-    def initialize(cls, config_path: Optional[str] = None) -> None:
+    def initialize(cls, config_path: str | None = None) -> None:
         """
         Initialize the configuration.
         
         Args:
             config_path: Optional path to a YAML configuration file
         """
-        # Start with default configuration
-        cls._config = cls._default_config.copy()
+        # Start with default configuration (deep copy to avoid shared nested dictionaries)
+        cls._config = deepcopy(cls._default_config)
         
         # Load configuration from file if provided
         if config_path:
@@ -135,7 +136,7 @@ class DBFacadeConfig:
             cls.initialize()
     
     @classmethod
-    def get(cls, key: str, default: Any = None) -> Any:
+    def get(cls, key: str, default: object = None) -> object:
         """
         Get a configuration value.
         

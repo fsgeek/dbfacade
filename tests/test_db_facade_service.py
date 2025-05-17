@@ -9,8 +9,7 @@ import os
 import sys
 import uuid
 from datetime import datetime
-from typing import Dict, Any, List, Optional, cast
-from unittest import mock
+from typing import cast
 
 import pytest
 from pydantic import BaseModel, Field
@@ -22,8 +21,8 @@ from indaleko_dbfacade.db.arangodb import ArangoDBClient
 from indaleko_dbfacade.config import DBFacadeConfig
 
 
-# Test models
-class TestUserModel(ObfuscatedModel):
+# Test models (prefix underscore to avoid pytest collection warning)
+class _TestUserModel(ObfuscatedModel):
     """Test user model for DB Facade Service tests."""
     
     username: str
@@ -33,7 +32,7 @@ class TestUserModel(ObfuscatedModel):
     created_at: datetime = Field(default_factory=datetime.now)
 
 
-class TestPostModel(ObfuscatedModel):
+class _TestPostModel(ObfuscatedModel):
     """Test post model for DB Facade Service tests."""
     
     title: str
@@ -50,7 +49,19 @@ def db_facade_service():
     # Set test environment
     os.environ["INDALEKO_MODE"] = "DEV"
     
-    # Initialize the DB Facade Service with test collections
+    # Initialize configuration with secrets file
+    secrets_file = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        ".secrets", "db_config.yaml"
+    )
+    
+    DBFacadeConfig.initialize()
+    if os.path.exists(secrets_file):
+        DBFacadeConfig.load_from_secrets_file(secrets_file)
+    else:
+        print(f"Secrets file not found: {secrets_file}", file=sys.stderr)
+        sys.exit(1)
+    
     service = DBFacadeService(
         registry_collection="test_registry",
         data_collection="test_data"
@@ -330,26 +341,29 @@ def test_register_model_schema(db_facade_service, mock_registry_client):
 
 def test_fail_stop_behavior_db_init():
     """Test fail-stop behavior for database initialization."""
-    # Mock the ArangoDBClient constructor to raise an exception
-    with mock.patch("indaleko_dbfacade.db.arangodb.ArangoDBClient", side_effect=Exception("DB connection failed")):
-        # Check that the service fails immediately
-        with pytest.raises(SystemExit) as excinfo:
-            DBFacadeService()
-        
-        # Check that the exit code is 1
-        assert excinfo.value.code == 1
+    # In the test environment, MCP functions aren't available,
+    # so the ArangoDBClient should fail with SystemExit
+    with pytest.raises(SystemExit) as excinfo:
+        from indaleko_dbfacade.db.arangodb import ArangoDBClient
+        ArangoDBClient()
+    
+    # Check that the exit code is 1
+    assert excinfo.value.code == 1
 
 
 def test_fail_stop_behavior_registry_init():
     """Test fail-stop behavior for registry initialization."""
-    # Mock the RegistryClient constructor to raise an exception
-    with mock.patch("indaleko_dbfacade.registry.client.RegistryClient", side_effect=Exception("Registry connection failed")):
-        # Check that the service fails immediately
-        with pytest.raises(SystemExit) as excinfo:
-            DBFacadeService()
-        
-        # Check that the exit code is 1
-        assert excinfo.value.code == 1
+    # The RegistryClient should fail if the registry is unavailable
+    # Set an invalid registry URL to test failure behavior
+    os.environ["INDALEKO_REGISTRY_URL"] = "http://invalid-registry:0000"
+    DBFacadeConfig.initialize()
+    
+    with pytest.raises(SystemExit) as excinfo:
+        from indaleko_dbfacade.registry.client import RegistryClient
+        RegistryClient()
+    
+    # Check that the exit code is 1
+    assert excinfo.value.code == 1
 
 
 def test_fail_stop_behavior_invalid_model(db_facade_service):
