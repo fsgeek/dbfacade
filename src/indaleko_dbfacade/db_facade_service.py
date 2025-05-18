@@ -60,9 +60,9 @@ class DBFacadeService:
             print(f"CRITICAL: Failed to initialize database connection: {e}", file=sys.stderr)
             sys.exit(1)
         
-        # Initialize registry client
+        # Initialize registry client with the same registry collection
         try:
-            self.registry = RegistryClient()
+            self.registry = RegistryClient(registry_collection=registry_collection)
         except Exception as e:
             print(f"CRITICAL: Failed to initialize registry client: {e}", file=sys.stderr)
             sys.exit(1)
@@ -148,7 +148,7 @@ class DBFacadeService:
                         # If we can't resolve the UUID, use it as is
                         resolved_data[field_uuid] = value
                 
-                return model_class.parse_obj(resolved_data)
+                return model_class.model_validate(resolved_data)
             else:
                 # In production mode, use the model's from_obfuscated method
                 return model_class.from_obfuscated(data)
@@ -223,7 +223,7 @@ class DBFacadeService:
                         # If we can't resolve the UUID, use it as is
                         resolved_data[field_uuid] = value
                 
-                models.append(model_class.parse_obj(resolved_data))
+                models.append(model_class.model_validate(resolved_data))
             else:
                 # In production mode, use the model's from_obfuscated method
                 models.append(model_class.from_obfuscated(data))

@@ -5,11 +5,9 @@ This module provides a client for interacting with the registry service,
 which maintains mappings between semantic labels and UUIDs.
 """
 
+import sys
 import time
-from typing import Dict, Optional, Set, Tuple, Type, Union
 from uuid import UUID, uuid4
-
-import requests
 
 from ..config import DBFacadeConfig
 
@@ -22,21 +20,33 @@ class RegistryClient:
     and vice versa, as well as for registering new mappings.
     """
     
-    def __init__(self, base_url: Optional[str] = None) -> None:
+    def __init__(self, registry_collection: str = "dbfacade_registry", base_url: str | None = None) -> None:
         """
         Initialize the registry client.
         
         Args:
+            registry_collection: Name of the registry collection
             base_url: Optional base URL for the registry service
         """
         self.base_url = base_url or DBFacadeConfig.get_registry_url()
+        self.registry_collection_name = registry_collection
         
         # Cache for mapping lookups to reduce registry service calls
-        self._label_to_uuid_cache: Dict[str, Tuple[UUID, float]] = {}
-        self._uuid_to_label_cache: Dict[UUID, Tuple[str, float]] = {}
+        self._label_to_uuid_cache: dict[str, tuple[UUID, float]] = {}
+        self._uuid_to_label_cache: dict[UUID, tuple[str, float]] = {}
         
         # Cache TTL in seconds
         self._cache_ttl = DBFacadeConfig.get("registry.cache_ttl", 3600)
+        
+        # Initialize database connection for registry storage
+        try:
+            from ..db.arangodb import ArangoDBClient
+            self.db = ArangoDBClient(registry_collection=registry_collection)
+            # Use the registry collection from the database client
+            self.registry_collection = self.db.db.collection(registry_collection)
+        except Exception as e:
+            print(f"Failed to initialize registry storage: {e}", file=sys.stderr)
+            sys.exit(1)
     
     def get_uuid_for_label(self, label: str) -> UUID:
         """
@@ -53,7 +63,6 @@ class RegistryClient:
             
         Raises:
             ValueError: If the label is invalid
-            ConnectionError: If the registry service is unavailable
         """
         # Check the cache first
         if label in self._label_to_uuid_cache:
@@ -61,21 +70,46 @@ class RegistryClient:
             if time.time() - timestamp < self._cache_ttl:
                 return uuid_value
         
-        # Use the ArangoDB client to get or create the UUID
+        # Query the registry collection for the label
         try:
-            from ..db.arangodb import ArangoDBClient
-            db = ArangoDBClient()
-            uuid_value = db.get_uuid_for_label(label)
-        except ImportError as e:
-            # Specific error for import failure
-            raise ConnectionError(f"Registry client unavailable: {e}")
-        # No generic exception handler - let errors propagate upward for better debugging
-        
-        # Store in cache
-        self._label_to_uuid_cache[label] = (uuid_value, time.time())
-        self._uuid_to_label_cache[uuid_value] = (label, time.time())
-        
-        return uuid_value
+            # Look up the label in the registry
+            query = """
+            FOR doc IN dbfacade_registry
+            FILTER doc.label == @label
+            LIMIT 1
+            RETURN doc
+            """
+            
+            cursor = self.db.db.aql.execute(
+                query,
+                bind_vars={"label": label}
+            )
+            
+            results = list(cursor)
+            
+            if results:
+                # Label exists, get the UUID
+                uuid_value = UUID(results[0]["uuid"])
+            else:
+                # Label doesn't exist, create a new mapping
+                uuid_value = uuid4()
+                document = {
+                    "_key": str(uuid_value),
+                    "label": label,
+                    "uuid": str(uuid_value),
+                    "created_at": time.time()
+                }
+                self.registry_collection.insert(document)
+            
+            # Update the caches
+            self._label_to_uuid_cache[label] = (uuid_value, time.time())
+            self._uuid_to_label_cache[uuid_value] = (label, time.time())
+            
+            return uuid_value
+            
+        except Exception as e:
+            print(f"Failed to get UUID for label '{label}': {e}", file=sys.stderr)
+            sys.exit(1)
     
     def get_label_for_uuid(self, uuid: UUID) -> str:
         """
@@ -88,8 +122,7 @@ class RegistryClient:
             The semantic label for the UUID
             
         Raises:
-            KeyError: If the UUID is not registered
-            ConnectionError: If the registry service is unavailable
+            KeyError: If the UUID is not found
         """
         # Check the cache first
         if uuid in self._uuid_to_label_cache:
@@ -97,54 +130,68 @@ class RegistryClient:
             if time.time() - timestamp < self._cache_ttl:
                 return label
         
-        # Use the ArangoDB client to get the label
+        # Query the registry collection for the UUID
         try:
-            from ..db.arangodb import ArangoDBClient
-            db = ArangoDBClient()
-            label = db.get_label_for_uuid(uuid)
-        except ImportError as e:
-            # Specific error for import failure
-            raise ConnectionError(f"Registry client unavailable: {e}")
-        # No generic exception handler - let errors propagate upward for better debugging
-        
-        # Store in cache
-        self._uuid_to_label_cache[uuid] = (label, time.time())
-        self._label_to_uuid_cache[label] = (uuid, time.time())
-        
-        return label
+            # Look up the UUID in the registry
+            query = """
+            FOR doc IN dbfacade_registry
+            FILTER doc.uuid == @uuid
+            LIMIT 1
+            RETURN doc
+            """
+            
+            cursor = self.db.db.aql.execute(
+                query,
+                bind_vars={"uuid": str(uuid)}
+            )
+            
+            results = list(cursor)
+            
+            if results:
+                # UUID exists, get the label
+                label = results[0]["label"]
+                
+                # Update the caches
+                self._label_to_uuid_cache[label] = (uuid, time.time())
+                self._uuid_to_label_cache[uuid] = (label, time.time())
+                
+                return label
+            else:
+                raise KeyError(f"UUID {uuid} not found in registry")
+                
+        except KeyError:
+            raise
+        except Exception as e:
+            print(f"Failed to get label for UUID '{uuid}': {e}", file=sys.stderr)
+            sys.exit(1)
     
-    def register_model_schema(self, model_class: Type) -> Dict[str, UUID]:
+    def register_model_schema(self, model_class: type) -> dict[str, UUID]:
         """
-        Register all fields in a model class with the registry.
-        
-        This ensures that all fields in the model have UUIDs assigned
-        in the registry service.
+        Register a model schema and return the UUID mappings.
         
         Args:
             model_class: The model class to register
             
         Returns:
-            Dictionary mapping field names to their UUIDs
-            
-        Raises:
-            ConnectionError: If the registry service is unavailable
+            Dictionary mapping field names to UUIDs
         """
-        # Get all field names from the model
-        field_names: Set[str] = set()
-        
-        # Look for field attributes on the model class
-        for name, value in model_class.__annotations__.items():
-            # Skip private attributes
+        # Get the model's field names
+        field_names = set()
+        for name, field in model_class.__annotations__.items():
             if not name.startswith("_"):
                 field_names.add(name)
         
-        # Register each field
-        mapping: Dict[str, UUID] = {}
+        # Add the model class name itself
+        field_names.add(model_class.__name__)
+        
+        # Register each field and build the mapping
+        mapping = {}
         for name in field_names:
             mapping[name] = self.get_uuid_for_label(name)
         
-        # Also register the model class name itself
-        model_name = model_class.__name__
-        mapping[model_name] = self.get_uuid_for_label(model_name)
-        
         return mapping
+    
+    def clear_cache(self) -> None:
+        """Clear the label/UUID caches."""
+        self._label_to_uuid_cache.clear()
+        self._uuid_to_label_cache.clear()

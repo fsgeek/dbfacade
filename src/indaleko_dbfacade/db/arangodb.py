@@ -2,7 +2,7 @@
 ArangoDB client for DB Facade.
 
 This module provides a client for connecting to ArangoDB using
-the MCP tools, designed for the DB Facade service.
+the python-arango driver, designed for the DB Facade service.
 """
 
 import json
@@ -11,6 +11,17 @@ import uuid
 from datetime import datetime, timezone
 from typing import cast
 
+from arango import ArangoClient
+from arango.cursor import Cursor
+from arango.exceptions import (
+    ArangoError,
+    CollectionCreateError,
+    DocumentInsertError,
+    DocumentGetError,
+    DocumentUpdateError,
+    DocumentDeleteError,
+)
+
 from ..config import DBFacadeConfig
 
 
@@ -18,8 +29,8 @@ class ArangoDBClient:
     """
     ArangoDB client for DB Facade.
     
-    This client interacts with ArangoDB using the MCP tools, providing
-    methods for CRUD operations on collections and documents.
+    This client interacts with ArangoDB using the python-arango driver,
+    providing methods for CRUD operations on collections and documents.
     """
     
     def __init__(
@@ -37,18 +48,31 @@ class ArangoDBClient:
         self.registry_collection = registry_collection
         self.data_collection = data_collection
         
-        # Import MCP tools
-        # These are available at runtime but not during static analysis
+        # Get database configuration
+        db_config = DBFacadeConfig.get_database_credentials()
+        db_url = DBFacadeConfig.get_database_url()
+        
         try:
-            import builtins
-            self.arango_query = getattr(builtins, "mcp__arango-mcp__arango_query")
-            self.arango_insert = getattr(builtins, "mcp__arango-mcp__arango_insert")
-            self.arango_update = getattr(builtins, "mcp__arango-mcp__arango_update")
-            self.arango_remove = getattr(builtins, "mcp__arango-mcp__arango_remove")
-            self.arango_create_collection = getattr(builtins, "mcp__arango-mcp__arango_create_collection")
-            self.arango_list_collections = getattr(builtins, "mcp__arango-mcp__arango_list_collections")
-        except (ImportError, AttributeError) as e:
-            print(f"Failed to import MCP tools: {e}", file=sys.stderr)
+            # Initialize ArangoDB client
+            self.client = ArangoClient(hosts=db_url)
+            
+            # Connect to the database
+            self.db = self.client.db(
+                name=db_config["database"],
+                username=db_config["username"],
+                password=db_config["password"],
+                auth_method="basic",
+                verify=True
+            )
+            
+            # Verify connection
+            self.db.properties()  # This will raise an exception if connection fails
+            
+        except ArangoError as e:
+            print(f"Failed to connect to ArangoDB: {e}", file=sys.stderr)
+            sys.exit(1)
+        except Exception as e:
+            print(f"Unexpected error connecting to database: {e}", file=sys.stderr)
             sys.exit(1)
         
         # Verify collections exist
@@ -60,19 +84,25 @@ class ArangoDBClient:
         
         If the collections don't exist, they will be created.
         """
-        # List existing collections
-        collections_result = self.arango_list_collections({})
-        existing_collections = [col["name"] for col in collections_result]
-        
-        # Create registry collection if it doesn't exist
-        if self.registry_collection not in existing_collections:
-            print(f"Creating collection: {self.registry_collection}")
-            self.arango_create_collection({"name": self.registry_collection})
+        try:
+            existing_collections = [col["name"] for col in self.db.collections()]
             
-        # Create data collection if it doesn't exist
-        if self.data_collection not in existing_collections:
-            print(f"Creating collection: {self.data_collection}")
-            self.arango_create_collection({"name": self.data_collection})
+            # Create registry collection if it doesn't exist
+            if self.registry_collection not in existing_collections:
+                print(f"Creating collection: {self.registry_collection}")
+                self.db.create_collection(self.registry_collection)
+                
+            # Create data collection if it doesn't exist
+            if self.data_collection not in existing_collections:
+                print(f"Creating collection: {self.data_collection}")
+                self.db.create_collection(self.data_collection)
+                
+        except CollectionCreateError as e:
+            print(f"Failed to create collection: {e}", file=sys.stderr)
+            sys.exit(1)
+        except ArangoError as e:
+            print(f"Failed to list collections: {e}", file=sys.stderr)
+            sys.exit(1)
     
     def insert(self, collection_uuid: uuid.UUID, data: dict[str, object]) -> uuid.UUID:
         """
@@ -96,13 +126,18 @@ class ArangoDBClient:
             "data": data
         }
         
-        # Insert the document
-        result = self.arango_insert({
-            "collection": self.data_collection,
-            "document": document
-        })
-        
-        return doc_uuid
+        try:
+            # Insert the document
+            collection = self.db.collection(self.data_collection)
+            collection.insert(document)
+            return doc_uuid
+            
+        except DocumentInsertError as e:
+            print(f"Failed to insert document: {e}", file=sys.stderr)
+            sys.exit(1)
+        except ArangoError as e:
+            print(f"Database error during insert: {e}", file=sys.stderr)
+            sys.exit(1)
     
     def query(
         self, 
@@ -145,14 +180,25 @@ class ArangoDBClient:
         RETURN doc
         """
         
-        # Execute the query
-        result = self.arango_query({
-            "query": query,
-            "bindVars": bind_vars
-        })
         
-        # Extract the data from each document
-        return [doc["data"] for doc in result]
+        try:
+            # Execute the query
+            cursor = self.db.aql.execute(
+                query,
+                bind_vars=bind_vars,
+                batch_size=1000
+            )
+            
+            # Extract the data from each document
+            results = []
+            for doc in cursor:
+                results.append(doc["data"])
+            
+            return results
+            
+        except ArangoError as e:
+            print(f"Query failed: {e}", file=sys.stderr)
+            sys.exit(1)
     
     def get(self, collection_uuid: uuid.UUID, record_uuid: uuid.UUID) -> dict[str, object]:
         """
@@ -174,21 +220,31 @@ class ArangoDBClient:
         RETURN doc
         """
         
-        # Execute the query
-        result = self.arango_query({
-            "query": query,
-            "bindVars": {
-                "record_uuid": str(record_uuid),
-                "collection_uuid": str(collection_uuid)
-            }
-        })
-        
-        # Check if a document was found
-        if not result:
-            raise ValueError(f"Document with UUID {record_uuid} not found")
+        try:
+            # Execute the query
+            cursor = self.db.aql.execute(
+                query,
+                bind_vars={
+                    "record_uuid": str(record_uuid),
+                    "collection_uuid": str(collection_uuid)
+                }
+            )
             
-        # Return the document data
-        return result[0]["data"]
+            # Get the result
+            results = list(cursor)
+            
+            # Check if a document was found
+            if not results:
+                raise ValueError(f"Document with UUID {record_uuid} not found")
+                
+            # Return the document data
+            return results[0]["data"]
+            
+        except ValueError:
+            raise  # Re-raise ValueError as is
+        except ArangoError as e:
+            print(f"Failed to get document: {e}", file=sys.stderr)
+            sys.exit(1)
     
     def update(
         self, 
@@ -205,17 +261,25 @@ class ArangoDBClient:
             data: Updated document data with UUID keys
         """
         # Prepare the update
-        update_data = {
+        update_doc = {
             "data": data,
             "updated_at": datetime.now(timezone.utc).isoformat()
         }
         
-        # Execute the update
-        self.arango_update({
-            "collection": self.data_collection,
-            "key": str(record_uuid),
-            "update": update_data
-        })
+        try:
+            # Update the document
+            collection = self.db.collection(self.data_collection)
+            collection.update({
+                "_key": str(record_uuid),
+                **update_doc
+            })
+            
+        except DocumentUpdateError as e:
+            print(f"Failed to update document: {e}", file=sys.stderr)
+            sys.exit(1)
+        except ArangoError as e:
+            print(f"Database error during update: {e}", file=sys.stderr)
+            sys.exit(1)
     
     def delete(self, collection_uuid: uuid.UUID, record_uuid: uuid.UUID) -> None:
         """
@@ -225,131 +289,23 @@ class ArangoDBClient:
             collection_uuid: UUID of the collection
             record_uuid: UUID of the document
         """
-        # Execute the delete
-        self.arango_remove({
-            "collection": self.data_collection,
-            "key": str(record_uuid)
-        })
+        try:
+            # Delete the document
+            collection = self.db.collection(self.data_collection)
+            collection.delete(str(record_uuid))
+            
+        except DocumentDeleteError as e:
+            print(f"Failed to delete document: {e}", file=sys.stderr)
+            sys.exit(1)
+        except ArangoError as e:
+            print(f"Database error during delete: {e}", file=sys.stderr)
+            sys.exit(1)
     
-    def store_mapping(self, label: str, uuid_value: uuid.UUID) -> None:
+    def close(self) -> None:
         """
-        Store a label to UUID mapping in the registry.
-        
-        Args:
-            label: Semantic label
-            uuid_value: Corresponding UUID
+        Close the database connection.
         """
-        # Prepare the document
-        document = {
-            "_key": str(uuid_value),
-            "label": label,
-            "created_at": datetime.now(timezone.utc).isoformat()
-        }
-        
-        # Check if the mapping already exists
-        query = f"""
-        FOR doc IN {self.registry_collection}
-        FILTER doc._key == @uuid
-        LIMIT 1
-        RETURN doc
-        """
-        
-        result = self.arango_query({
-            "query": query,
-            "bindVars": {
-                "uuid": str(uuid_value)
-            }
-        })
-        
-        if result:
-            # Update the existing mapping
-            self.arango_update({
-                "collection": self.registry_collection,
-                "key": str(uuid_value),
-                "update": {
-                    "label": label,
-                    "updated_at": datetime.now(timezone.utc).isoformat()
-                }
-            })
-        else:
-            # Insert a new mapping
-            self.arango_insert({
-                "collection": self.registry_collection,
-                "document": document
-            })
-    
-    def get_label_for_uuid(self, uuid_value: uuid.UUID) -> str:
-        """
-        Get the semantic label for a UUID.
-        
-        Args:
-            uuid_value: UUID to look up
-            
-        Returns:
-            Corresponding semantic label
-            
-        Raises:
-            ValueError: If the UUID is not found in the registry
-        """
-        # Construct the AQL query
-        query = f"""
-        FOR doc IN {self.registry_collection}
-        FILTER doc._key == @uuid
-        LIMIT 1
-        RETURN doc
-        """
-        
-        # Execute the query
-        result = self.arango_query({
-            "query": query,
-            "bindVars": {
-                "uuid": str(uuid_value)
-            }
-        })
-        
-        # Check if a mapping was found
-        if not result:
-            raise ValueError(f"UUID {uuid_value} not found in registry")
-            
-        # Return the label
-        return result[0]["label"]
-    
-    def get_uuid_for_label(self, label: str) -> uuid.UUID:
-        """
-        Get the UUID for a semantic label.
-        
-        If the label is not already registered, a new UUID will be
-        generated and registered for it.
-        
-        Args:
-            label: Semantic label to look up
-            
-        Returns:
-            Corresponding UUID
-        """
-        # Construct the AQL query
-        query = f"""
-        FOR doc IN {self.registry_collection}
-        FILTER doc.label == @label
-        LIMIT 1
-        RETURN doc
-        """
-        
-        # Execute the query
-        result = self.arango_query({
-            "query": query,
-            "bindVars": {
-                "label": label
-            }
-        })
-        
-        # Check if a mapping was found
-        if result:
-            # Return the existing UUID
-            return uuid.UUID(result[0]["_key"])
-            
-        # Generate a new UUID and store the mapping
-        new_uuid = uuid.uuid4()
-        self.store_mapping(label, new_uuid)
-        
-        return new_uuid
+        try:
+            self.client.close()
+        except Exception as e:
+            print(f"Error closing database connection: {e}", file=sys.stderr)

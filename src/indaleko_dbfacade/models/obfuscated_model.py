@@ -7,7 +7,7 @@ allowing transparent mapping between semantic field names and UUIDs.
 
 import os
 from enum import Enum
-from typing import Any, Dict, Optional, Set, Type, TypeVar, cast, get_type_hints
+from typing import TypeVar, cast, get_type_hints
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, create_model, field_validator
@@ -41,7 +41,7 @@ class ObfuscatedField:
         self,
         *,
         obfuscation_level: ObfuscationLevel = ObfuscationLevel.UUID_ONLY,
-        description: Optional[str] = None,
+        description: str | None = None,
     ) -> None:
         """
         Initialize an ObfuscatedField.
@@ -52,9 +52,9 @@ class ObfuscatedField:
         """
         self.obfuscation_level = obfuscation_level
         self.description = description
-        self.field_name: Optional[str] = None
+        self.field_name: str | None = None
         
-    def __set_name__(self, owner: Type["ObfuscatedModel"], name: str) -> None:
+    def __set_name__(self, owner: type["ObfuscatedModel"], name: str) -> None:
         """
         Store the field name when the descriptor is assigned to a class.
         
@@ -81,10 +81,10 @@ class ObfuscatedModel(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     
     # Class variable to store field metadata for obfuscation
-    __obfuscated_fields__: Dict[str, ObfuscatedField] = {}
+    __obfuscated_fields__: dict[str, ObfuscatedField] = {}
     
     # Registry client instance for this model
-    __registry_client: Optional[RegistryClient] = None
+    __registry_client: RegistryClient | None = None
     
     @classmethod
     def _get_registry_client(cls) -> RegistryClient:
@@ -101,14 +101,14 @@ class ObfuscatedModel(BaseModel):
         return cls.__registry_client
     
     @classmethod
-    def _collect_obfuscated_fields(cls) -> Dict[str, ObfuscatedField]:
+    def _collect_obfuscated_fields(cls) -> dict[str, ObfuscatedField]:
         """
         Collect all ObfuscatedField descriptors from the class.
         
         Returns:
             Dictionary mapping field names to their ObfuscatedField instance
         """
-        fields: Dict[str, ObfuscatedField] = {}
+        fields: dict[str, ObfuscatedField] = {}
         
         # Look through all class attributes
         for name, value in cls.__dict__.items():
@@ -120,7 +120,7 @@ class ObfuscatedModel(BaseModel):
         return fields
     
     @classmethod
-    def _register_model_schema(cls) -> Dict[str, UUID]:
+    def _register_model_schema(cls) -> dict[str, UUID]:
         """
         Register this model's schema with the registry service.
         
@@ -148,7 +148,7 @@ class ObfuscatedModel(BaseModel):
             field_names.add(name)
         
         # Register all fields with the registry
-        mapping: Dict[str, UUID] = {}
+        mapping: dict[str, UUID] = {}
         for name in field_names:
             uuid = registry.get_uuid_for_label(name)
             mapping[name] = uuid
@@ -160,7 +160,7 @@ class ObfuscatedModel(BaseModel):
         
         return mapping
     
-    def _map_to_uuids(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    def _map_to_uuids(self, data: dict[str, object]) -> dict[str, object]:
         """
         Map semantic field names to UUIDs and encrypt sensitive fields.
         
@@ -187,7 +187,7 @@ class ObfuscatedModel(BaseModel):
             encryptor = FieldEncryptor()
         
         # Create a new dictionary with UUID keys
-        uuid_data: Dict[str, Any] = {}
+        uuid_data: dict[str, object] = {}
         
         # Get the obfuscated field metadata
         obfuscated_fields = self._collect_obfuscated_fields()
@@ -212,6 +212,10 @@ class ObfuscatedModel(BaseModel):
                     obfuscated_fields[key].obfuscation_level.value == "encrypted"
                 )
                 
+                # Handle datetime serialization
+                if hasattr(value, 'isoformat'):  # datetime objects
+                    value = value.isoformat()
+                
                 if should_encrypt:
                     # Encrypt the field value
                     encrypted_value = encryptor.encrypt_field(value, uuid_obj)
@@ -222,6 +226,9 @@ class ObfuscatedModel(BaseModel):
             except Exception:
                 # In dev mode, allow using semantic names for convenience
                 if DBFacadeConfig.is_dev_mode():
+                    # Also handle datetime serialization in dev mode
+                    if hasattr(value, 'isoformat'):
+                        value = value.isoformat()
                     uuid_data[key] = value
                 else:
                     # In production, fail hard if a mapping is missing
@@ -229,7 +236,7 @@ class ObfuscatedModel(BaseModel):
         
         return uuid_data
     
-    def _map_to_semantic(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    def _map_to_semantic(self, data: dict[str, object]) -> dict[str, object]:
         """
         Map UUID field names back to semantic names and decrypt encrypted fields.
         
@@ -259,7 +266,7 @@ class ObfuscatedModel(BaseModel):
             encryptor = FieldEncryptor()
         
         # Create a new dictionary with semantic keys
-        semantic_data: Dict[str, Any] = {}
+        semantic_data: dict[str, object] = {}
         
         # Convert each UUID key to its semantic name
         for key, value in data.items():
@@ -299,7 +306,23 @@ class ObfuscatedModel(BaseModel):
         
         return semantic_data
     
-    def model_dump(self, **kwargs: Any) -> Dict[str, Any]:
+    def get_obfuscated_data(self) -> dict[str, object]:
+        """
+        Get the obfuscated representation of this model.
+        
+        This method converts semantic field names to UUIDs and optionally
+        encrypts sensitive fields before storing in the database.
+        
+        Returns:
+            Dictionary with UUID keys and possibly encrypted values
+        """
+        # Get a dictionary representation of the model
+        data = self.model_dump()
+        
+        # Map semantic names to UUIDs
+        return self._map_to_uuids(data)
+
+    def model_dump(self, **kwargs: object) -> dict[str, object]:
         """
         Override model_dump to map UUIDs back to semantic names in dev mode.
         
@@ -319,7 +342,7 @@ class ObfuscatedModel(BaseModel):
         return uuid_dict
     
     @classmethod
-    def create_from_semantic(cls: Type[T], **data: Any) -> T:
+    def create_from_semantic(cls: type[T], **data: object) -> T:
         """
         Create a model instance from semantic field names.
         
@@ -334,7 +357,7 @@ class ObfuscatedModel(BaseModel):
         """
         # Map semantic field names to UUIDs
         registry = cls._get_registry_client()
-        uuid_data: Dict[str, Any] = {}
+        uuid_data: dict[str, object] = {}
         
         for key, value in data.items():
             # Skip private attributes
@@ -346,10 +369,18 @@ class ObfuscatedModel(BaseModel):
             try:
                 uuid = registry.get_uuid_for_label(key)
                 uuid_key = str(uuid)
+                
+                # Handle datetime serialization
+                if hasattr(value, 'isoformat'):  # datetime objects
+                    value = value.isoformat()
+                    
                 uuid_data[uuid_key] = value
             except Exception:
                 # In dev mode, allow using semantic names for convenience
                 if DBFacadeConfig.is_dev_mode():
+                    # Also handle datetime serialization in dev mode
+                    if hasattr(value, 'isoformat'):
+                        value = value.isoformat()
                     uuid_data[key] = value
                 else:
                     # In production, fail hard if a mapping is missing
@@ -359,7 +390,7 @@ class ObfuscatedModel(BaseModel):
         return cls(**uuid_data)
     
     @classmethod
-    def create_from_uuid(cls: Type[T], **data: Any) -> T:
+    def create_from_uuid(cls: type[T], **data: object) -> T:
         """
         Create a model instance from UUID field names.
         
@@ -374,3 +405,36 @@ class ObfuscatedModel(BaseModel):
         """
         # Create the model instance with UUID keys
         return cls(**data)
+    
+    @classmethod
+    def from_obfuscated(cls: type[T], data: dict[str, object]) -> T:
+        """
+        Create a model instance from obfuscated data.
+        
+        This method handles both UUID mapping and decryption if needed.
+        
+        Args:
+            data: Dictionary with UUID keys and possibly encrypted values
+            
+        Returns:
+            A new instance of the model with semantic field names
+        """
+        # In development mode, convert UUIDs back to semantic names
+        if DBFacadeConfig.is_dev_mode():
+            registry = cls._get_registry_client()
+            semantic_data = {}
+            
+            for uuid_key, value in data.items():
+                try:
+                    # Try to parse as UUID and get the semantic label
+                    uuid_obj = UUID(uuid_key)
+                    label = registry.get_label_for_uuid(uuid_obj)
+                    semantic_data[label] = value
+                except (ValueError, KeyError):
+                    # If not a valid UUID or not found, keep the original key
+                    semantic_data[uuid_key] = value
+            
+            return cls(**semantic_data)
+        else:
+            # In production mode, use the UUID keys directly
+            return cls(**data)
